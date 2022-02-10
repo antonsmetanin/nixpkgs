@@ -1,4 +1,4 @@
-{ lib, stdenvNoCC, linkFarmFromDrvs, nuget-to-nix, writeScript, makeWrapper, fetchurl, xml2, dotnetCorePackages, dotnetPackages, cacert }:
+{ lib, stdenvNoCC, linkFarmFromDrvs, nuget-to-nix, writeScript, makeWrapper, fetchurl, xml2, dotnetCorePackages, dotnetPackages, cacert, csproj-patcher }:
 
 { name ? "${args.pname}-${args.version}"
 , enableParallelBuilding ? true
@@ -39,6 +39,9 @@
 #     <ProjectReference Include="../foo/bar.fsproj" />
 #     <PackageReference Include="bar" Version="*" Condition=" '$(ContinuousIntegrationBuild)'=='true' "/>
 , projectReferences ? []
+
+, references ? []
+
 # Libraries that need to be available at runtime should be passed through this.
 # These get wrapped into `LD_LIBRARY_PATH`.
 , runtimeDeps ? []
@@ -103,6 +106,8 @@ let
     )));
   };
 
+  patcher = csproj-patcher.override { dotnet-sdk = dotnet-sdk; };
+
   package = stdenvNoCC.mkDerivation (args // {
     inherit buildType;
 
@@ -154,12 +159,16 @@ let
       '';
     } // args.passthru or {};
 
+    references = null;
+
     configurePhase = args.configurePhase or ''
       runHook preConfigure
 
       export HOME=$(mktemp -d)
 
       for project in ''${projectFile[@]} ''${testProjectFile[@]}; do
+        ${lib.optionalString (references != [])
+          "${patcher}/bin/patcher --projectFile $project ${builtins.concatStringsSep " " (map (r: "--reference ${r.name}=${r.path}") references)}"}
         dotnet restore "$project" \
           ${lib.optionalString (!enableParallelBuilding) "--disable-parallel"} \
           -p:ContinuousIntegrationBuild=true \
